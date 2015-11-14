@@ -117,12 +117,15 @@ void sniffpkts(pcap_t *handle, char *errbuff){
 	//FIX: make this a timed condition
 	while (1){
 		packet = pcap_next(handle, &header);
+		//printf("packet length: %d \n", header.len);
 
 		if (packet !=NULL){
 			getpktdata(packet);
 		}
 
 	}
+
+	pcap_close(handle);
 
 }
 
@@ -142,19 +145,26 @@ void getpktdata(const unsigned char *packet){
 	int size_ip = ip_hl(iphdr)*4;
 
 	switch(iphdr->ipproto){
-	case 1:
+	case IPPROTO_ICMP:
 		puts("protocol ICMP");
 		icmphdr = (struct icmpheader*)(packet + ethernetsize + size_ip);
 		//do some icmp analysis here
 		return;
-	case 6:
-		puts("protocol TCP");
+	case IPPROTO_TCP:
 		tcphdr = (struct tcpheader*)(packet + ethernetsize + size_ip);
+		switch(tcphdr->tcpflags){
+		case SYNflag:
+			puts("TCP SYN");
+			break;
+		case ACKflag:
+			puts("TCP ACK");
+			break;
+		}
 		return;
-	case 17:
+	case IPPROTO_UDP:
 		puts("protocol UDP");
 		return;
-	case 4:
+	case IPPROTO_IP:
 		puts("protocol IP");
 		return;
 	default:
