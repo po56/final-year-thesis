@@ -16,84 +16,70 @@ typedef unsigned short u_short;
 
 #define etheraddrsize 6
 
-void sniffpkts(pcap_t *handle, char *errbuff);
+static int packetnumber;
 
-void startclassifier();
-
-void openerror(char *dev);
-
-struct instanceData{
-	/*
-	 * possible indicators of a SYN flood attack
-	 * looking for a large number of SYN packets with small number of fin packets
-	 * multiple source addresses could also indicate spoof style attack
-	 */
+struct trafficsample{
+	u_int icmpcount;
 	u_int syncount;
+	u_int tcpcount;
 	u_int ackcount;
 	u_int fincount;
 	u_int unqiuesourcecount;
-	/*
-	 * some possible UDP flood indicators. Looking for a large number of UDP packets
-	 * and ICMP destination unreachable messages. Large number of dest unreachable messages
-	 * implies source ports being targeted that have no application listening
-	 * per source information isnt particularly helpful since the ip address in this type of attack is usually spoofed
-	 */
 	u_int udpcount;
 	u_int unreachableportcount;
-	/*
-	 * some possible ICMP flood indicators
-	 * looking for a large number of ICMP echo requests
-	 */
 	u_int echorequests;
-	/*
-	 * some possible smurf attack relechorequests++;
-			break;
-		case echoreply:
-			instance.echoreplies++;
-			break;ated behaviour
-	 * looking for a very large number of echo replies
-	 * possible dest address of 255.255.255.255 for broadcasting echo request
-	 */
 	u_int echoreplies;
 	u_int localpingbroadcasts;
-
-
 };
 
-void getpktdata(const u_char  *packet, struct instanceData *instance);
+//some parameters that may be useful for a OCSVM
+struct packetsample{
+	int size;
+	u_char source_port;
+	u_char dest_port;
+	u_char *payload;
+	u_char *type;
+};
 
-/*
- * method for testing that data has been gathered
- */
+typedef struct addressNode{
+	char addressvalue[15];
+	struct addressNode *next;
+}srcnode;
 
-void printinstancedata(struct instanceData *instance);
+struct suspiciousaddresses{
+};
 
-struct icmpheader{
+srcnode *head;
+srcnode *temp;
+srcnode *tail;
+
+void getpktdata(const u_char  *packet, struct trafficsample *instance);
+void sniffpkts(pcap_t *handle, char *errbuff, char *traffictype);
+void openerror(char *dev);
+void printsample(struct trafficsample *s, char *traffictype);
+void getAppData(u_char *payload, int *payloadsize, struct packetsample *packetdata);
+void checkBlackList(char *srcaddr); //will use google's safe browsing API;
+void add(char *srcaddr);
+int findAddress(char *srcaddress);
+void pingAddress(char *srcaddress); //perform some shallow analysis to check if the ip address is real or not by sending an echo request
+
+typedef struct icmpheader{
 #define echorequest 8
 #define echoreply 0
 #define destinationunreachable 3
 #define destportunreachable 3
-
 	u_char  icmptype;
 	u_char  icmpcode;
 	u_short icmpchecksum;
-};
+}icmpheader;
 
-//this information might be helpful for a slowloris style attack
-
-struct peraddressflow{
-	u_int bandwidthuse;
-	u_int numberofconnections;
-
-};
-
-struct ethernetheader{
+typedef struct ethernetheader{
 	u_char  s_host[etheraddrsize];
 	u_char  d_host[etheraddrsize];
 	u_char  ethertype;
-};
+}ethernetheader;
 
-struct ipheader{
+typedef struct ipheader{
 	u_char  ver_headerlen;
 	u_char  servicetype;
 	u_char  totlen;
@@ -108,17 +94,17 @@ struct ipheader{
 	//source addresses as unsigned 32 bit ints
 	struct in_addr ipsrc;
 	struct in_addr ipdest;
-};
+}ipheader;
 //header length is the last 4 bits of this byte so mask all but these
 #define ip_hl(ip) (((ip)->ver_headerlen) &0x0f)
 //do a bitwise shift to extract the first 4 bits (all bits in original position prior to shift will be replaced by 0)
 #define ip_ver(ip) (((ip)->ver_headerlen) >> 4)
 
-struct tcpheader{
+typedef struct tcpheader{
 	u_char  s_port;
 	u_char  d_port;
-	u_char  tcpseq[4];
-	u_char  tcpacknum[4];
+	unsigned long tcpseq;
+	unsigned long acknum;
 	u_char  offset_reserved;
 #define offset(tcp) (((tcp)->offset_reserved) >>4)
 	u_char  tcpflags;
@@ -132,99 +118,102 @@ struct tcpheader{
 #define PSHflag 0x08
 #define ACKflag 0x10
 #define URGflag 0x20
-#define ECEflag 0x40
-#define CWRflag 0x80
-	u_char  tcpwinsize;
-	u_char  tcpchecksum;
-	u_char  urgptr;
-};
+	u_short  tcpwinsize;
+	u_short  tcpchecksum;
+	u_short  urgptr;
+}tcpheader;
+
 /*
  * all UDP values are 2 bytes in length, therefore use unsigned shorts
  */
-struct udpheader{
+typedef struct udpheader{
 	u_short srcport;
 	u_short destport;
 	u_short length;
 	u_short checksum;
-};
+}udpheader;
 
+void sniffpkts(pcap_t *handle, char *errbuff, char *traffictype){
 
-//void printinstancedata(struct instanceData *instance){
-//	printf("number of SYN packets: %d \n", instance->syncount);
-//	printf("number of ACK packets: %d \n", instance->ackcount);
-//	printf("number of FIN packets: %d \n", instance->fincount);
-//	printf("number of source addresses: %d \n", instance->unqiuesourcecount);
-//	printf("number of UDP packets: %d \n", instance->udpcount);
-//	printf("number of ping requests: %d \n", instance->echorequests);
-//	printf("number of ping replies: %d \n", instance->echoreplies);
-//	printf("number of ping requests sent to the broadcast address: %d \n", instance->localpingbroadcasts);
-//	printf("number of port unreachable errors %d \n", instance->unreachableportcount);
-//	//deallocate the memory after printing
-//	memset(instance, 0, sizeof(instance));
-//	free(instance);
-//}
-
-
-void sniffpkts(pcap_t *handle, char *errbuff){
-
-	typedef struct instanceData instance;
-	typedef struct timeval time;
+	typedef struct trafficsample instance;
 	double timetorecord = 10.00;
 	struct pcap_pkthdr header;
 	const u_char  *packet;
-	const u_char  *firstpacket;
-	time startTime, currTime;
 	clock_t start;
 
-	puts ("sniffing packets...");
-	//allocate some memory for the instance
-
-	instance *newInstance = (struct instanceData*)malloc(sizeof(instance));
-
+	instance *newInstance = (struct trafficsample*)malloc(sizeof(instance));
 	if(newInstance==NULL){
 		puts("memory allocation failure");
 		exit(EXIT_FAILURE);
 	}else{
-
-	printf("allocated memory for a new timed instance \n");
-	printf("capturing packets at %f second intervals \n", timetorecord);
-
 	start = clock();
+	puts("starting clock");
 	while ((clock()-start)/CLOCKS_PER_SEC <= timetorecord){
 		packet = pcap_next(handle, &header);
-		if (packet !=NULL){
-			getpktdata(packet,newInstance);
-
+		if (packet != NULL){
+			packetnumber++;
+			getpktdata(packet, newInstance);
 		}
 	}
+	printf("number of sources in this time %d \n", newInstance->unqiuesourcecount);
+	puts("done sampling");
 
-
-
-	printf("number of SYN packets: %d \n", newInstance->syncount);
-	printf("number of ACK packets: %d \n", newInstance->ackcount);
-	printf("number of FIN packets: %d \n", newInstance->fincount);
-	printf("number of source addresses: %d \n", newInstance->unqiuesourcecount);
-	printf("number of UDP packets: %d \n", newInstance->udpcount);
-	printf("number of ping requests: %d \n", newInstance->echorequests);
-	printf("number of ping replies: %d \n", newInstance->echoreplies);
-	printf("number of ping requests sent to the broadcast address: %d \n", newInstance->localpingbroadcasts);
-	printf("number of port unreachable errors %d \n", newInstance->unreachableportcount);
-	//deallocate the memory after printing
-	puts("finished recording, deallocating memory...");
-
+	printsample(newInstance, traffictype);
+	packetnumber = 0;
 	memset(newInstance, 0, sizeof(instance));
 	free(newInstance);
+	head = NULL;
+	temp = NULL;
+	tail = NULL;
 	}
 }
 
+void add(char *srcaddress){
+	srcnode *tem;
+	tem = (srcnode*)malloc(sizeof(srcnode));
+	strcpy(tem->addressvalue, srcaddress);
+	tem->next = NULL;
+	if (head == NULL){
+		head = tem;
+		temp = head;
+		tail = head;
+	}
+	else{
+		temp = tem;
+		tail->next = temp;
+		tail = temp;
+	}
+	return;
+}
 
-void getpktdata(const u_char  *packet, struct instanceData *instance){
+void getAppData(u_char *payload, int *payloadsize, struct packetsample *packetinfo){
+	u_char *character;
+	u_char asciibuffer[*payloadsize];
+	character = payload;
+	int i =0;
+	for (i=0; i < *payloadsize; i++){
+		asciibuffer[i] = *character;
+		character++;
+	}
+	packetinfo->payload = asciibuffer;
+}
+int findAddress(char *srcaddress){
+	temp = head;
+	while (temp!=NULL){
+		if (strcmp(temp->addressvalue, srcaddress)==0){
+			return 1;
+		}
+		temp = temp->next;
+	}
+	return 0;
+}
+
+void getpktdata(const u_char  *packet, struct trafficsample *instance){
 #define ethernetsize 14
-	typedef struct ethernetheader ethernetheader;
-	typedef struct ipheader ipheader;
-	typedef struct tcpheader tcpheader;
-	typedef struct icmpheader icmpheader;
-	typedef struct udpheader udpheader;
+#define payloadlsize(tcp) (nthos(ip->totlen)-(size))
+
+	struct packetsample *packetAnalysis;
+	packetAnalysis = (struct packetsample*)malloc(sizeof(struct packetsample));
 
 	ethernetheader *ethhdr;
 	ipheader *iphdr;
@@ -232,28 +221,26 @@ void getpktdata(const u_char  *packet, struct instanceData *instance){
 	icmpheader *icmphdr;
 	udpheader *udp;
 
-
+	char broadcastadddress[] = "255.255.255.255.255";
 	ethhdr = (ethernetheader*)(packet);
 	iphdr = (ipheader*)(packet + ethernetsize);
 
-	/*
-	 * IHL usually split into 32 bit words. But we get the same result by multiplying the value by 4
-	 */
+	char *srcaddrstring = inet_ntoa(iphdr->ipsrc);
+	char *destaddrstring = inet_ntoa(iphdr->ipdest);
 
+	if(findAddress(srcaddrstring)==0){
+		add(srcaddrstring);
+		instance->unqiuesourcecount++;
+	}
 	int size_ip = ip_hl(iphdr)*4;
-	/*
-	 * data structure for storing previously seen ipadresses
-	 */
+	int totalsize = ntohs(iphdr->totlen);
+	packetAnalysis->size = totalsize;
 	switch(iphdr->ipproto){
 	case IPPROTO_ICMP:
 		icmphdr = (struct icmpheader*)(packet + ethernetsize + size_ip);
-
 		switch (icmphdr->icmptype){
 		case echorequest:
-			//255.255.255.255.255 is the broadcast address for the local network
-			//NEVER forwards packets to networks outside the local network, therefore risk of smurf limited to local hosts
-			//checking for smurf related activity
-			if(inet_ntoa(iphdr->ipdest)=="255.255.255.255.255"){
+			if(destaddrstring == broadcastadddress){
 				instance->localpingbroadcasts++;
 			}
 			instance->echorequests++;
@@ -269,23 +256,22 @@ void getpktdata(const u_char  *packet, struct instanceData *instance){
 		}
 		return;
 	case IPPROTO_TCP:
+		instance->tcpcount++;
 		tcphdr = (tcpheader*)(packet + ethernetsize + size_ip);
-		switch(tcphdr->tcpflags){
-		case SYNflag:
+		packetAnalysis->source_port = ntohs(tcphdr->s_port);
+		packetAnalysis->dest_port = ntohs(tcphdr->d_port);
+		int tcp_hdrsize = offset(tcphdr)*4;
+		//u_char payload = (u_char*)(packet+ethernetsize+size_ip + tcp_hdrsize);
+		if (tcphdr->tcpflags == SYNflag){
 			instance->syncount++;
-			break;
-		case ACKflag:
+		}else if (tcphdr->tcpflags == ACKflag){
 			instance->ackcount++;
-			break;
-		case FINflag:
-			instance->fincount++;
-			break;
 		}
 		return;
-
 	case IPPROTO_UDP:
 		udp = (udpheader*)(packet + ethernetsize + size_ip);
-
+		packetAnalysis->source_port = ntohs(udp->srcport);
+		packetAnalysis->dest_port = ntohs(udp->destport);
 		instance->udpcount++;
 		return;
 	case IPPROTO_IP:
@@ -294,12 +280,36 @@ void getpktdata(const u_char  *packet, struct instanceData *instance){
 		return;
 
 	}
+	free(packetAnalysis);
+
+
 }
 
-/*
- * sniffer will close if handle cannot be created
- */
+void printsample(struct trafficsample *s, char *traffictype){
 
+#define percentage(integer) (integer/packetnumber);
+	FILE *fp;
+	fp = fopen("sampletest", "a+");
+
+	if (fp == NULL){
+		puts("could not open file");
+		exit(1);
+	}
+	fprintf(fp, "%f,", (((double)s->tcpcount)/packetnumber)*100); //percentage TCP
+	fprintf(fp, "%f,", (((double)s->syncount)/packetnumber)*100); //percentage SYN
+	fprintf(fp, "%f,", (((double)s->ackcount)/packetnumber)*100); //percentage ACK
+	fprintf(fp, "%f,", (((double)s->fincount)/packetnumber)*100); //percentage FIN
+	fprintf(fp, "%f,", (((double)s->udpcount)/packetnumber)*100); //percentage UDP
+	fprintf(fp, "%d,", s->unreachableportcount); //number of unreachable port errors
+	fprintf(fp, "%d,", s->unqiuesourcecount); //number of unique source addresses
+	fprintf(fp, "%d,", s->echorequests); //percentage of ICMP messages that were ping broadcasts
+	fprintf(fp, "%d,", s->echoreplies); //number of echo replies
+	fprintf(fp, "%d,", s->localpingbroadcasts); //number of pings sent to the broadcast address
+	fprintf(fp, "%s", traffictype);
+	fprintf(fp, "\n");
+	fclose(fp);
+	return;
+}
 void openerror(char *dev){
 	printf("could not open device  %s. Ensure that root privileges are enabled \n", dev);
 	exit (EXIT_FAILURE);
@@ -307,48 +317,46 @@ void openerror(char *dev){
 
 int main(int argc, char *argv[]){
 
-	char *sniffdevice, *runmode;
+#define samplesize 500
+
+	char *sniffdevice, *runmode, *traffictype;
+	char defaultdevice[] = "wlan0";
 	char errbuff[PCAP_ERRBUF_SIZE];
 	pcap_t *handle;
 
-	sniffdevice = argv[1];
-	runmode = argv[2];
+	sniffdevice = defaultdevice;
+	runmode = argv[2]==NULL? "live": argv[2];
+	printf("running in %s mode \n", runmode);
+	traffictype = argv[3];
 
 	if (sniffdevice==NULL){
-		puts("please ensure that you specify a device");
-		exit(EXIT_FAILURE);
+		sniffdevice = defaultdevice;
 	}else{
 		printf("Device chosen: %s \n", sniffdevice);
 		handle = pcap_open_live(sniffdevice, BUFSIZ, 1, -1, errbuff);
 		if (handle == NULL){
 			openerror(sniffdevice);
 		}else
-			switch (runmode){
-			case "train":
+			if(runmode == "-train"){
 				int i = 0;
-				while (i<500){
-					puts ("capturing attack data");
-					sniffpkts(handle, errbuff);
+				while (i<samplesize){
+					printf("recording sample %d for traffic type %s \n", i, traffictype);
+					sniffpkts(handle, errbuff, traffictype);
 					i++;
-
 				}
-				break;
-			case "live":
+				printf("finished sampling data");
+			}else{
 				while(1){
-					puts("sniffing packets");
-					sniffpkts(handle, errbuff);
+					sniffpkts(handle,errbuff, traffictype);
 				}
 			}
-			/*
-			 * loop to capture packets indefinitley
-			 */
-
-			//capture 500 instances of attack data
-
 		pcap_close(handle);
-	}
 
+	}
+	return 1;
 }
+
+
 
 
 
