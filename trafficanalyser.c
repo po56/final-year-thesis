@@ -10,12 +10,15 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <math.h>
+//will use later for shared memory operations
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
 typedef unsigned int u_int;
 typedef unsigned char u_char;
 typedef unsigned short u_short;
+
+char *myaddress;
 
 bpf_u_int32 mask;
 bpf_u_int32 net;
@@ -27,12 +30,13 @@ static int packetnumber;
 const char *runmode;
 
 struct trafficsample {
+	u_int payloadbytestransferred;
 	u_int icmpcount;
 	u_int syncount;
 	u_int tcpcount;
 	u_int ackcount;
 	u_int fincount;
-	u_int unqiuesourcecount;
+	u_int number_of_sources;
 	u_int udpcount;
 	u_int unreachableportcount;
 	u_int echorequests;
@@ -169,6 +173,7 @@ void sniffpkts(pcap_t *handle, char *errbuff, char *traffictype) {
 		if (runmode == "-train") {
 			printsample(newInstance, traffictype);
 		} else {
+			//do some shared memory wizardry here
 
 		}
 
@@ -180,8 +185,6 @@ void sniffpkts(pcap_t *handle, char *errbuff, char *traffictype) {
 		tail = NULL;
 	}
 }
-
-
 
 void add(char *srcaddress) {
 	srcnode *tem;
@@ -199,6 +202,10 @@ void add(char *srcaddress) {
 	}
 	return;
 }
+
+
+
+//Extension
 
 //void getAppData(u_char *payload, int *payloadsize,
 //		struct packetsample *packetinfo) {
@@ -235,23 +242,17 @@ int checkportUsage(u_short destport) {
 	addr.sin_port = htons(portNum);
 	bzero((char*) &addr, sizeof(addr));
 	if (bind(testSock, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
-		puts("port in use!");
 		returnval = 1;
-		//didnt bind the socket, so the port must be in use
 	} else {
-		//bound the socket, so the port is NOT in use by any application
-		puts("port unreachable");
 		returnval = 0;
 		close(testSock);
 	}
 	return returnval;
 }
 
-
-
 void getpktdata(const u_char *packet, struct trafficsample *instance) {
-#define ethernetsize 14
 #define payloadlsize(tcp) (nthos(ip->totlen)-(size))
+#define ethernetsize 14
 
 	struct packetsample *packetAnalysis;
 	packetAnalysis = (struct packetsample*) malloc(sizeof(struct packetsample));
@@ -262,23 +263,27 @@ void getpktdata(const u_char *packet, struct trafficsample *instance) {
 	icmpheader *icmphdr;
 	udpheader *udp;
 
-	//char broadcastadddress[] = "255.255.255.255.255";
 	ethhdr = (ethernetheader*) (packet);
 	iphdr = (ipheader*) (packet + ethernetsize);
 
-	//char *destaddrstring = inet_ntoa(iphdr->ipdest);
-	char *srcaddrstring = inet_ntoa(iphdr->ipsrc);
+	int ip_header_size = ip_hl(iphdr) * 4;
+	int total_packet_size = ntohs(iphdr->totlen);
 
-	if (findAddress(srcaddrstring) == 0) {
-		add(srcaddrstring);
-		instance->unqiuesourcecount++;
+	char *srcaddr = strdup(inet_ntoa(iphdr->ipsrc));
+	char *destaddr = strdup(inet_ntoa(iphdr->ipdest));
+
+	printf("packet source %s \n", srcaddr);
+	printf("packet destination %s \n", destaddr);
+
+	if (findAddress(srcaddr) == 0) {
+		add(srcaddr);
+		instance->number_of_sources++;
 	}
-	int size_ip = ip_hl(iphdr) * 4;
-	int totalsize = ntohs(iphdr->totlen);
+
 //		packetAnalysis->size = totalsize;
 	switch (iphdr->ipproto) {
 	case IPPROTO_ICMP:
-		icmphdr = (struct icmpheader*) (packet + ethernetsize + size_ip);
+		icmphdr = (struct icmpheader*) (packet + ethernetsize + ip_header_size);
 		switch (icmphdr->icmptype) {
 //		case echorequest:
 //			if (destaddrstring == broadcastadddress) {
@@ -293,7 +298,7 @@ void getpktdata(const u_char *packet, struct trafficsample *instance) {
 		return;
 	case IPPROTO_TCP:
 		instance->tcpcount++;
-		tcphdr = (tcpheader*) (packet + ethernetsize + size_ip);
+		tcphdr = (tcpheader*) (packet + ethernetsize + ip_header_size);
 //			packetAnalysis->source_port = ntohs(tcphdr->s_port);
 //			packetAnalysis->dest_port = ntohs(tcphdr->d_port);
 		//u_char payload = (u_char*)(packet+ethernetsize+size_ip + tcp_hdrsize);
@@ -304,12 +309,14 @@ void getpktdata(const u_char *packet, struct trafficsample *instance) {
 		}
 		return;
 	case IPPROTO_UDP:
-		udp = (udpheader*) (packet + ethernetsize + size_ip);
+		udp = (udpheader*) (packet + ethernetsize + ip_header_size);
 //			packetAnalysis->source_port = ntohs(udp->srcport);
 //			packetAnalysis->dest_port = ntohs(udp->destport);
 		instance->udpcount++;
-		if (checkportUsage(udp->destport) == 0) {
-			instance->unreachableportcount++;
+		if (destaddr == myaddress) {
+			if (checkportUsage(udp->destport) == 0) {
+				instance->unreachableportcount++;
+			}
 		}
 
 		return;
@@ -320,6 +327,8 @@ void getpktdata(const u_char *packet, struct trafficsample *instance) {
 
 	}
 	free(packetAnalysis);
+	free(srcaddr);
+	free(destaddr);
 }
 
 void printsample(struct trafficsample *s, char *traffictype) {
@@ -337,7 +346,7 @@ void printsample(struct trafficsample *s, char *traffictype) {
 	fprintf(fp, "%f,", (((double) s->fincount) / packetnumber) * 100); //percentage FIN
 	fprintf(fp, "%f,", (((double) s->udpcount) / packetnumber) * 100); //percentage UDP
 	fprintf(fp, "%d,", s->unreachableportcount); //number of unreachable port errors
-	fprintf(fp, "%d,", s->unqiuesourcecount); //number of unique source addresses
+	fprintf(fp, "%d,", s->number_of_sources); //number of unique source addresses
 	fprintf(fp, "%d,", s->echorequests); //percentage of ICMP messages that were ping broadcasts
 	fprintf(fp, "%d,", s->echoreplies); //number of echo replies
 	fprintf(fp, "%d,", s->localpingbroadcasts); //number of pings sent to the broadcast address
@@ -353,13 +362,9 @@ void openerror(char *dev) {
 	exit(EXIT_FAILURE);
 }
 
-
-
-
 int main(int argc, char *argv[]) {
-
 #define samplesize 500
-
+	struct in_addr myaddr;
 	char *sniffdevice, *traffictype;
 	char errbuff[PCAP_ERRBUF_SIZE];
 	pcap_t *handle;
@@ -374,7 +379,13 @@ int main(int argc, char *argv[]) {
 	if (sniffdevice == NULL) {
 		puts("enter a device to sniff on");
 	} else {
-		pcap_lookupnet(sniffdevice, &net, &mask, errbuff);
+
+		if (pcap_lookupnet(sniffdevice, &net, &mask, errbuff) == -1) {
+			printf("could not get the netmask for this device %s \n", errbuff);
+		} else {
+			myaddr.s_addr = net;
+			myaddress = strdup(inet_ntoa(myaddr));
+		}
 		handle = pcap_open_live(sniffdevice, BUFSIZ, 1, -1, errbuff);
 
 		if (handle != NULL) {
@@ -404,4 +415,5 @@ int main(int argc, char *argv[]) {
 	}
 	return 1;
 }
+
 
