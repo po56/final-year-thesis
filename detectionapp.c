@@ -13,6 +13,8 @@
 #include <sys/types.h>
 #include "detectionFunctions.h"
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #define traceSize 9
 #define ethersize 14
@@ -28,9 +30,10 @@ struct listNode {
 	struct listNode *next;
 };
 
-
 struct listNode *rootNode;
 struct listNode *temp;
+
+//classification will be done in a seperate thread so that the packets can continue being sampled while the thread is running
 
 void createReport(int classificationResult, time_t currentTime) {
 	const char *threat_type;
@@ -60,6 +63,7 @@ void createReport(int classificationResult, time_t currentTime) {
 			"A THREAT HAS BEEN DETECTED \n details \n type: %s \n time: %s \n suspect trace: \n",
 			threat_type, asctime(timestring));
 }
+
 //credit to binary tides for this function
 unsigned short in_cksum(unsigned short *ptr, int nbytes) {
 	register long sum;
@@ -166,6 +170,8 @@ void *getPingStats(void *args) {
 
 	to.sin_addr.s_addr = inet_addr(chosenSource);
 	to.sin_family = AF_INET;
+	to.sin_port = 9001;
+
 	memset(&to.sin_zero, 0, sizeof(to.sin_zero));
 
 	sentpacket = (unsigned char*) malloc(IP_MAXPACKET * sizeof(unsigned char));
@@ -268,8 +274,10 @@ int createHandle(char *sniffing_device) {
 	return 1;
 }
 
+
+
 char *trace_to_string(struct timedTrace *trace) {
-	char *serializedAsString = malloc(50);
+	char *serializedAsString = malloc(100*sizeof(char));
 	sprintf(serializedAsString, "%.2f", trace->icmp_persec);
 	sprintf(&serializedAsString[strlen(serializedAsString)], "%c", ',');
 	sprintf(&serializedAsString[strlen(serializedAsString)], "%d",
@@ -280,9 +288,6 @@ char *trace_to_string(struct timedTrace *trace) {
 	sprintf(&serializedAsString[strlen(serializedAsString)], "%c", ',');
 	sprintf(&serializedAsString[strlen(serializedAsString)], "%.2f",
 			trace->tcp_ack_percentage);
-	sprintf(&serializedAsString[strlen(serializedAsString)], "%c", ',');
-	sprintf(&serializedAsString[strlen(serializedAsString)], "%.2f",
-			trace->tcp_fin_percentage);
 	sprintf(&serializedAsString[strlen(serializedAsString)], "%c", ',');
 	sprintf(&serializedAsString[strlen(serializedAsString)], "%d",
 			trace->port_errors);
@@ -333,14 +338,9 @@ int samplepackets(struct timedTrace *trace) {
 
 	bzero(traceInts, sizeof(struct traceIntegers));
 
-	if (checkExistance("192.168.0.161") == 0) {
-		addNode("192.168.0.161");
-		traceInts->source_count++;
-	}
+	threadVal = pthread_create(&pingThread, NULL, getPingStats, (void *) &args);
 
-	threadVal = pthread_create(&pingThread, NULL, getPingStats, (void *)&args);
-
-	if (threadVal != 0){
+	if (threadVal != 0) {
 		fprintf(stderr, "could not create a new ping thread");
 	}
 
@@ -348,16 +348,12 @@ int samplepackets(struct timedTrace *trace) {
 
 	while ((duration = difftime(time(0), start_time)) <= record_time) {
 
-		traceInts->ping_req_count = 5;
-
 		packet = pcap_next(handle, &header);
 
 		if (packet != NULL) {
 			inspect_pkt(packet, traceInts);
 		}
 	}
-
-	pthread_join(pingThread, NULL);
 
 	trace->icmp_persec = pkt_type_per_sec(traceInts, icmp_count, record_time);
 	zerocheck(traceInts, syn_count,
@@ -370,7 +366,10 @@ int samplepackets(struct timedTrace *trace) {
 	memcpy(&trace->ping_replies, &traceInts->ping_rep_count, sizeof(int));
 	memcpy(&trace->unique_sources, &traceInts->source_count, sizeof(int));
 
-	addressPrinter();
+	//addressPrinter();
+
+	pthread_join(pingThread, NULL);
+
 	return 1;
 }
 
@@ -409,12 +408,19 @@ int inspect_pkt(const unsigned char *packet, struct traceIntegers *traceInts) {
 		traceInts->icmp_count++;
 		struct icmphdr *icmp = (struct icmphdr*) (packet + ethersize
 				+ (ip->ihl * 4));
-		if (icmp->type == ICMP_ECHO) {
+		switch (icmp->type) {
+		case ICMP_ECHO:
 			traceInts->ping_req_count++;
-		} else if (icmp->type == ICMP_ECHOREPLY) {
+			break;
+		case ICMP_ECHOREPLY:
 			traceInts->ping_rep_count++;
+			break;
+		case ICMP_DEST_UNREACH:
+			if (icmp->code == ICMP_PORT_UNREACH) {
+				traceInts->port_error_count++;
+			}
+			break;
 		}
-
 		return 1;
 	}
 	return 1;
@@ -423,6 +429,7 @@ int inspect_pkt(const unsigned char *packet, struct traceIntegers *traceInts) {
 int train(char *sniffing_device) {
 
 	char type[50];
+	int samplesize;
 
 	int try_CreateHandle = createHandle(sniffing_device);
 
@@ -439,17 +446,24 @@ int train(char *sniffing_device) {
 		}
 		scanf("%s", type);
 
-		printf("OK, gathering data for a %s attack \n", type);
+		printf("please enter the number of samples to be collected:");
+
+		scanf("%d", &samplesize);
+
+		printf("OK, gathering %d samples for %s traffic \n", samplesize,type);
 
 		struct timedTrace *trace = (struct timedTrace*) malloc(
 				sizeof(struct timedTrace));
 		i = 0;
-		while (i < 500) {
-			samplepackets(trace);
-			char *concatenated = strcat(trace_to_string(trace), ", NORMAL \n");
-			traceToFile(concatenated);
+		while (i < samplesize) {
 			memset(trace, 0, sizeof(struct timedTrace));
-			printf("\r finished sample %d of 500 \n", i);
+			samplepackets(trace);
+			char *trace_as_string = trace_to_string(trace);
+			char *str1 = strcat(trace_as_string, " ");
+			char *str2 = strcat(str1,type);
+			char *final = strcat(str2, "\n");
+			traceToFile(final);
+			printf("\r finished sample %d of %d \n", i+1, samplesize);
 			fflush(stdout);
 			i++;
 		}
@@ -460,8 +474,119 @@ int train(char *sniffing_device) {
 	return 1;
 }
 
+void *classificationTread(void *arg) {
+	int inputPipe[2], outputPipe[2], status;
+	char readBuffer[80];
+	pid_t waitPID, childPID;
+
+	struct timedTrace *trace = (struct timedTrace*) arg;
+
+	char *args = strcat(trace_to_string(trace), "\n");
+
+	status = 0;
+
+	pipe(inputPipe);
+	pipe(outputPipe);
+
+	childPID = fork();
+
+	if (childPID == -1) {
+		perror("error creating child process");
+	}
+
+	//if we are the child process
+	if (childPID == 0) {
+		puts("running classifier...");
+		close(inputPipe[1]);
+		close(outputPipe[0]);
+		dup2(inputPipe[2], STDIN_FILENO);
+		dup2(outputPipe[1], STDOUT_FILENO);
+		char *pythonArgs[] = { "python", "./volumebasedclassifier.py", NULL };
+		execvp("python", pythonArgs);
+		exit(0);
+	} else {
+		close(inputPipe[0]);
+		close(outputPipe[1]);
+		write(inputPipe[1], args, 6);
+		waitPID = wait(&status);
+		printf(" \n parent detected child process %d is done \n", waitPID);
+		read(outputPipe[0], readBuffer, sizeof(readBuffer));
+		printf("outputted class: %s \n", readBuffer);
+
+	}
+
+}
+
+void classifier(struct timedTrace *trace) {
+	fflush(stdout);
+	fflush(stdin);
+
+	int inputPipe[2], outputPipe[2], status;
+	char readBuffer[80];
+	pid_t waitPID, childPID;
+
+	char *args = strcat(trace_to_string(trace), "\n");
+
+	printf("%s \n", args);
+
+	status = 0;
+
+	pipe(inputPipe);
+	pipe(outputPipe);
+
+	childPID = fork();
+
+	if (childPID == -1) {
+		perror("error creating child process");
+	}
+	//if we are the child process
+	if (childPID == 0) {
+
+		puts("running testIPC...");
+		close(inputPipe[1]);
+		close(outputPipe[0]);
+		dup2(inputPipe[0], STDIN_FILENO);
+		dup2(outputPipe[1], STDOUT_FILENO);
+		char *pythonArgs[] = { "python", "./volumebasedclassifier.py", NULL };
+		execvp("python", pythonArgs);
+		exit(0);
+	} else {
+		close(inputPipe[0]);
+		close(outputPipe[1]);
+		write(inputPipe[1], args, strlen(args));
+		waitPID = wait(&status);
+		printf(" \n parent detected child process %d is done \n", waitPID);
+		read(outputPipe[0], readBuffer, sizeof(readBuffer));
+		printf("outputted class: %s \n", readBuffer);
+
+
+	}
+}
+
 int test(char *sniffing_device) {
 
+	if (createHandle(sniffing_device) < 0) {
+		perror("could not create handle");
+	}
+
+	struct timedTrace *trace = (struct timedTrace*) malloc(
+			sizeof(struct timedTrace));
+
+	puts("monitoring network traffic...");
+
+	while (1) {
+		//pthread_t analyzerthread;
+		memset(trace, 0, sizeof(struct timedTrace));
+		samplepackets(trace);
+		classifier(trace);
+		//pthread_create(&analyzerthread, NULL, classificationTread, trace);
+		//pthread_join(analyzerthread, NULL);
+
+	}
+
+	fprintf(stderr, "monitoring stopped!");
+	free(trace);
+	return 0;
 }
 
 void displayMenu() {
@@ -479,14 +604,12 @@ void displayMenu() {
 		puts("please enter a capture device");
 		scanf("%s", device);
 		goodSource = "216.58.213.110";
-
 		train(device);
 		return;
 	case 2:
 		puts("please enter a capture device");
 		scanf("%s", device);
-		puts("please enter a known host to ping against for testing purposes");
-		scanf("%s", goodSource);
+		goodSource = "216.58.213.110";
 		test(device);
 		return;
 	case 3:
