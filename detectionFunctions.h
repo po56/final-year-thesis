@@ -23,17 +23,39 @@ struct flowInfo{
 	double lastRecivedTime;
 	double time_active;
 	double time_inactive;
-	int numberOfConnections;
+	double percentageHTTPConnectionsheld;
+	int num_HTTP_connections;
 	int byte_count;
 	int num_pkts;
 };
+
+struct threatReport{
+	char *type;
+	time_t timestamp;
+	void *data;
+};
+
+typedef struct HTTPrequest{
+	char *method;
+	char *URI;
+	char *version;
+	char *messagebody;
+}HTTPRequest;
+
+struct HTTPCacheEntry{
+	char *srcAddress;
+	char *destAddress;
+	int *sourcePort;
+	char *truncated_data;
+	int *lastseqnum;
+};
+
 
 struct timedTrace {
 	double icmp_persec;
 	unsigned int unique_sources;
 	double tcp_syn_percentage;
 	double tcp_ack_percentage;
-	double tcp_fin_percentage;
 	int port_errors;
 	int ping_requests;
 	int ping_replies;
@@ -63,13 +85,15 @@ void investigatePacket(const unsigned char *packet);
 
 int classifyTrace();
 
-int train(char *sniffing_device);
+int _runmode_train(char *sniffing_device);
 
-int test(char *sniffing_device);
+void _runmode_test(char *sniffing_device);
 
 int samplepackets(struct timedTrace *trace);
 
-int shallow_inspect_pkt(const unsigned char *packet, struct traceIntegers *traceInts, double *pktTimeStamp);
+int packet_fragmentation_check(struct ip *ip, int headerlen);
+
+int shallow_inspect_pkt(const unsigned char *packet, struct traceIntegers *traceInts, double *ts, int totalpktsize);
 
 unsigned char *parseToAscii(const unsigned char *payload, int len);
 
@@ -81,11 +105,13 @@ int createHandle(char *sniffingdevice);
 
 char *createKey(char *srcAddress, char *destAddress, int *srcPort, int *destPort, int *proto);
 
-void createReport(int classificationResult, time_t currentTime);
+void createReport(char *classificationResult);
 
-void trace_to_file(char *type);
+void trace_to_file(char *data, char *trainingdata_filename);
 
 void *getPingStats(void *args);
+
+void parseSQL(char *packetdata);
 
 double averageRTT(double times[], int nSamples, int iterator);
 
