@@ -1,0 +1,91 @@
+#usr/bin/python
+
+from sklearn import svm
+from sklearn import cross_validation
+import sys
+import socket
+import os
+
+
+
+
+def main():
+
+	X = []
+	Y = []
+
+	server_address = '/classifierstream'
+	#remove any previous instances of the socket, in case the program did not close correctly. 
+	try:
+		os.remove(server_address)
+	except OSError:
+		pass 
+	sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+	print 'created socket'
+	sock.bind(server_address)
+	print 'socket bound'
+
+	#open the training document
+	with open ("trainingdata", "r") as trainingdata:
+	    for line in trainingdata:
+		currentSample = line.split(",")
+		X.append(currentSample)
+		Y.append(currentSample.pop().replace('\n', ''))
+
+	for item in Y:
+	    if item == " NORMAL":
+		item = 1
+	    else:
+		if item == " SYNFLOOOD":
+		    item = 2
+
+
+	#c parameter influences the size of the seperating hyperplane. Larer value = smaller hyperplane and visa versa
+	clf = svm.SVC(kernel= 'linear', C=4)
+
+	#cross validate for accuracy
+	X_train, X_test, y_train, y_test = cross_validation.train_test_split(X, Y, test_size=0.6, random_state=0)
+
+	clf.fit(X_train, y_train)
+
+	score = clf.score(X_test, y_test)
+
+	#fitting the whole training set for final classification
+
+	clf.fit(X,Y)
+
+	#listening for input from the main app
+
+	sock.listen(1)
+
+	while 1:
+		connection ,client_addr = sock.accept()
+		
+		while 1:
+			data = connection.recv(1024)
+			
+			if not data:
+				break
+			print data
+
+			formattedList = [float(x) for x in data.split(",")]
+			connection.send(clf.predict(formattedList))
+				
+		
+		connection.close()
+
+	
+
+	
+
+	#predicting the output based on the training data
+
+	
+
+	
+
+
+
+if __name__ == '__main__':
+    main()
+

@@ -1,0 +1,12 @@
+ALERT, A THREAT HAS BEEN DETECTED! 
+Time Detected: Sat Apr  2 16:46:30 2016 	 Threat Type SYN FLOOD 
+Affected Hosts: 
+152.168.2.1
+152.168.2.2
+SUSPECT FLOWS 
+172.16.51.201 -> 152.168.2.1 TCP 
+ports 0 -> 0 
+1 packets 0 bytes 
+172.16.51.201 -> 152.168.2.2 TCP 
+ports 0 -> 0 
+1 packets 0 bytes 

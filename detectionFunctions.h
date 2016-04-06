@@ -20,6 +20,9 @@ struct flowInfo{
 	char *protocol;
 	int sourcePort;
 	int destPort;
+	int tcpSYNSTransmiteed;
+	int tcpACKSTransmitted;
+	int unreachableErrorsInvoked;
 	double lastRecivedTime;
 	double time_active;
 	double time_inactive;
@@ -27,6 +30,13 @@ struct flowInfo{
 	int num_HTTP_connections;
 	int byte_count;
 	int num_pkts;
+};
+
+struct SQLi{
+	char *src;
+	char *dst;
+	char *str;
+	char *reason;
 };
 
 struct threatReport{
@@ -46,7 +56,7 @@ struct HTTPCacheEntry{
 	char *srcAddress;
 	char *destAddress;
 	int *sourcePort;
-	char *truncated_data;
+	const char *truncated_data;
 	int *lastseqnum;
 };
 
@@ -75,15 +85,6 @@ struct PingArgs {
 	char *sourceAddress;
 };
 
-double calculateTimeActive(time_t *time1);
-
-double calculateTimeInactive(time_t *time1, time_t *time2);
-
-int attemptTraceroute(char *srcaddress);
-
-void investigatePacket(const unsigned char *packet);
-
-int classifyTrace();
 
 int _runmode_train(char *sniffing_device);
 
@@ -97,26 +98,18 @@ int shallow_inspect_pkt(const unsigned char *packet, struct traceIntegers *trace
 
 unsigned char *parseToAscii(const unsigned char *payload, int len);
 
-int deep_inspect_pkt(const unsigned char *packet);
-
-int inspect_HTTP(const unsigned char *asciiText, int payload_len);
+void inspectHTTPData(const char *HTTPacket, int payload_len, char *source, char *dest);
 
 int createHandle(char *sniffingdevice);
 
 char *createKey(char *srcAddress, char *destAddress, int *srcPort, int *destPort, int *proto);
 
-void createReport(char *classificationResult);
-
-void trace_to_file(char *data, char *trainingdata_filename);
-
 void *getPingStats(void *args);
 
-void parseSQL(char *packetdata);
+void parseSQL(char *packetdata, char *src, char *dest);
 
 double averageRTT(double times[], int nSamples, int iterator);
 
-int classify(struct timedTrace *trace);
 
 #endif
-
 
